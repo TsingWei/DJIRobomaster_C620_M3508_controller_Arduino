@@ -1,0 +1,10 @@
+language: c
+
+addons:
+  sonarcloud:
+    organization: "autowp-github"
+    token:
+      secure: $SONARCLOUD_TOKEN
+
+script:
+  - sonar-scanner || travis_terminate 1;

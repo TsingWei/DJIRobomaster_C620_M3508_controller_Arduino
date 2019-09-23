@@ -23,7 +23,7 @@ int delta_pos;                // 两次采样的转子位置差值
 char recv[20];
 
 int set_pos = 1000;
-int set_speed = 500;
+int set_speed = 100;
 
 
 // 位置环PID参数
@@ -33,8 +33,9 @@ const int pos_Kd = 0;
 
 // 速度环PID参数
 const int speed_Kp = 5;
-const int speed_Ki = 0;
+const float speed_Ki = 0.1;
 const int speed_Kd = 0;
+long sum_delta_speed = 0;
 
 int TAG;
 
@@ -54,12 +55,16 @@ int update_RPM_est(int newRPM) // RPM的均值滤波
 
 int PIDout(long setPos)
 {
-  return constrain(pos_Kp * (setPos - position), -16384, 16384);
+  return constrain(
+    pos_Kp * (setPos - position),
+    -16384, 16384);
 }
 
 int PID_Speed(long setSpeed)
 {
-  return constrain(speed_Kp * (setSpeed - RPM[0]), -16384, 16384);
+  return constrain(
+    speed_Kp * (setSpeed - RPM[0]) + speed_Ki * sum_delta_speed,
+    -16384, 16384);
 }
 
 void initMotor()
@@ -81,6 +86,7 @@ void updateInfo(int motorID)
   // RPM[motorID] = toRealData(canMsgIn.data[2], canMsgIn.data[3]);  // 不滤波
   actualCurrent[motorID] = toRealData(canMsgIn.data[4], canMsgIn.data[5]);
   T[motorID] = canMsgIn.data[6];
+  sum_delta_speed += set_speed - RPM[0];
 
   delta_pos = angle[motorID] - angle_last[motorID] ;
   if (RPM[motorID] < 1000 && RPM[motorID] > -1000)       // 低速状态
@@ -109,7 +115,7 @@ void updateInfo(int motorID)
   { 
     position += (long)(RPM[motorID] * i1)*10;
   }
-
+  
   angle_last[motorID] = angle[motorID];
   setMotorCurrent(0, PID_Speed(set_speed));
 }
@@ -198,10 +204,11 @@ void loop()
   if (Serial.available() > 0){
     length = Serial.readBytes( recv, 20);
     recv[length] = '\0';
-    set_speed = atoi(recv);
-    Serial.print("Set speed to");
-    Serial.println(recv);
+    if(abs(set_speed<5000))
+      set_speed = atoi(recv);
+    // Serial.print("Set speed to");
+    // Serial.println(recv);
   }
   
-  // printMessage(canMsgIn.can_id - 0x201);
+  printMessage(canMsgIn.can_id - 0x201);
 }

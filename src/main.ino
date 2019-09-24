@@ -20,16 +20,17 @@ int slide_R = 0;              // RPM的均值滤波的flag
 const long interval = 500;    // 采样间隔 单位ns
 int delta_pos;                // 两次采样的转子位置差值
 
-char recv[20];
+char recv[50];
 
-int set_pos = 1000;
-int set_speed = 100;
+long set_pos = 150000;
+int set_speed = 0;
 
 
 // 位置环PID参数
-const int pos_Kp = 200; 
-const int pos_Ki = 0;
+const int pos_Kp = 32; 
+const int pos_Ki = 100;
 const int pos_Kd = 0;
+int64_t sum_delta_pos = 0;
 
 // 速度环PID参数
 const int speed_Kp = 5;
@@ -39,7 +40,7 @@ long sum_delta_speed = 0;
 
 int TAG;
 
-long position = 0; // 当前转子位置，+1圈 = +10
+int64_t position = 0; // 当前转子位置
 float i1 = 136.53333 / (1000000 / interval);
 
 int update_RPM_est(int newRPM) // RPM的均值滤波
@@ -53,10 +54,10 @@ int update_RPM_est(int newRPM) // RPM的均值滤波
   return total / window_size;
 }
 
-int PIDout(long setPos)
+int PID_Position(int64_t setPos)
 {
   return constrain(
-    pos_Kp * (setPos - position),
+    0.001 * pos_Kp *(setPos - position) + 0.000001 * pos_Ki * sum_delta_pos,
     -16384, 16384);
 }
 
@@ -87,36 +88,40 @@ void updateInfo(int motorID)
   actualCurrent[motorID] = toRealData(canMsgIn.data[4], canMsgIn.data[5]);
   T[motorID] = canMsgIn.data[6];
   sum_delta_speed += set_speed - RPM[0];
+  if(set_pos - position > 200)
+    sum_delta_pos += set_pos - position;
 
   delta_pos = angle[motorID] - angle_last[motorID] ;
-  if (RPM[motorID] < 1000 && RPM[motorID] > -1000)       // 低速状态
+  if (abs(RPM[motorID]) < 1200)       // 低速状态
   { 
     // 转满一圈
-    if (delta_pos < -7000)
-      position += 10;
-    else if (delta_pos > 7000)
-      position -= 10;
+    if (delta_pos < -8000)
+      position ++;
+    else if (delta_pos > 8000)
+      position --;
     // 未转满一圈
     else
-      position += (delta_pos * 10) / 8192; 
+      position += delta_pos; 
   }
-  else if (abs(RPM[motorID]) < 8000)  // 中速状态
+  else if (abs(RPM[motorID]) < 6000)  // 中速状态
   { 
-    if (RPM[motorID] < 0 && delta_pos > 5000)
+    if (RPM[motorID] < 0 && delta_pos > 4000)
     {
-      position -= 10;
+      position -= 8192;
     }
-    else if (-delta_pos > 5000 && RPM[motorID] > 0)
+    else if (-delta_pos > 4000 && RPM[motorID] > 0)
     {
-      position += 10;
+      position += 8192;
     }
   }
   else   // 高速状态，直接取转速近似积分
   { 
-    position += (long)(RPM[motorID] * i1)*10;
+    position += (RPM[motorID] * i1)*8192;
   }
   
   angle_last[motorID] = angle[motorID];
+
+  set_speed = PID_Position(set_pos);
   setMotorCurrent(0, PID_Speed(set_speed));
 }
 
@@ -142,7 +147,11 @@ void printMessage(int motorID)
   // Serial.print(delta_pos);
   // Serial.print("\t");
 
-  // Serial.print(position);
+  Serial.print(long(position));
+  Serial.print("\t");
+  Serial.print(angle[motorID]);
+  Serial.print("\t");
+
   // Serial.print(set_pos);
   // Serial.print("\t");
 
@@ -151,8 +160,8 @@ void printMessage(int motorID)
   Serial.print("\t");
 
   // Serial.print("RPM: ");
-  // Serial.print(set_pos);
-  // Serial.print("\t");
+  Serial.print(set_pos);
+  Serial.print("\t");
 
   // Serial.print("I: ");
   // Serial.print(actualCurrent[motorID]);
@@ -202,12 +211,10 @@ void loop()
   // delay(500);
   int length;
   if (Serial.available() > 0){
-    length = Serial.readBytes( recv, 20);
+    length = Serial.readBytes(recv, 50);
     recv[length] = '\0';
-    if(abs(set_speed<5000))
-      set_speed = atoi(recv);
-    // Serial.print("Set speed to");
-    // Serial.println(recv);
+    set_pos = atol (recv);
+
   }
   
   printMessage(canMsgIn.can_id - 0x201);

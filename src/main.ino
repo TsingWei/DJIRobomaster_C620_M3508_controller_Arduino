@@ -1,13 +1,20 @@
 #include <SPI.h>
 #include <mcp2515.h>
 #include <TimerOne.h>
+#include <Kalman.h>
+#include <MsTimer2.h>
+#include <FastPID.h>
 
 #define window_size 5
+int TEST_SPEED = 800;
 
-struct can_frame canMsgIn;  // CAN packet received
-struct can_frame canMsgOut; // CAN packet to send
-MCP2515 mcp2515(53);        // CS(SS) to pin 53 on MEGA2560
-int angle[2] = {0};      // Suppose 2 motors totally
+struct can_frame canMsgIn;          // 收到的can包
+struct can_frame canMsgOut;         // 要发的can包
+MCP2515 mcp2515(53);                // CS(SS) to pin 53 on MEGA2560
+// Kalman myFilter(0.125,32,1023,0);   // Kalman滤波器
+// 0.03 16
+Kalman myFilter(0.03,16,1023,0);   // Kalman滤波器
+int angle[2] = {0};                 // Suppose 2 motors totally
 int angle_last[2] = {0};
 int RPM[2] = {0};
 int actualCurrent[2] = {0};
@@ -16,56 +23,64 @@ int T[2] = {0};
 
 int RPM_est[window_size] = {0};
 int slide_R = 0;              // RPM的均值滤波的flag
+int RAW_RPM;                  // 原始RPM值
 
-const long interval = 500;    // 采样间隔 单位ns
+const long interval = 500;    // 采样间隔 单位us
 int delta_pos;                // 两次采样的转子位置差值
 
 char recv[50];
 
-long set_pos = 150000;
+long set_pos = 15000;
 int set_speed = 0;
+int set_current = 0;
 
 
 // 位置环PID参数
-const int pos_Kp = 32; 
-const int pos_Ki = 100;
+const float pos_Kp = 0.15; //.045 
+const float pos_Ki = 0.00006;//00006
 const int pos_Kd = 0;
-int64_t sum_delta_pos = 0;
+long sum_delta_pos = 0;
+
 
 // 速度环PID参数
-const int speed_Kp = 5;
-const float speed_Ki = 0.1;
-const int speed_Kd = 0;
+const float speed_Kp = 2.0; //1.5
+const float speed_Ki = 0; // 0.002
+const float speed_Kd = 0;
 long sum_delta_speed = 0;
+int delta_speed = 0;
+FastPID speed_PID(speed_Kp, speed_Ki, speed_Kd, 1000000/interval, 15, 1);
 
 int TAG;
 
-int64_t position = 0; // 当前转子位置
+long position = 0; // 当前转子位置
 float i1 = 136.53333 / (1000000 / interval);
 
-int update_RPM_est(int newRPM) // RPM的均值滤波
-{
-  int total = 0;
-  RPM_est[slide_R] = newRPM;
-  slide_R++;
-  slide_R = slide_R % window_size;
-  for (int i = 0; i < window_size; i++)
-    total += RPM_est[i];
-  return total / window_size;
-}
 
-int PID_Position(int64_t setPos)
+int calc_Position(const long setPos)
 {
   return constrain(
-    0.001 * pos_Kp *(setPos - position) + 0.000001 * pos_Ki * sum_delta_pos,
+    pos_Kp *(setPos - position) + 0 * sum_delta_pos,
     -16384, 16384);
 }
 
-int PID_Speed(long setSpeed)
+int calc_Speed(const long setSpeed)
 {
-  return constrain(
-    speed_Kp * (setSpeed - RPM[0]) + speed_Ki * sum_delta_speed,
-    -16384, 16384);
+  return speed_PID.step(setSpeed, RPM[0]);
+  // if(setSpeed>1000)
+  //   return constrain(
+  //     speed_Kp * (setSpeed - RPM[0]) + speed_Ki * sum_delta_speed - speed_Kd * delta_speed ,
+  //     -16384, 16384);
+  // else
+  //   return constrain(
+  //     speed_Kp * (setSpeed - RPM[0]) + speed_Ki * sum_delta_speed - speed_Kd * delta_speed ,
+  //     -16384, 16384);
+}
+
+void TEST(){
+  if(TEST_SPEED == 5000)
+    TEST_SPEED = 0;
+  else
+    TEST_SPEED = 5000;
 }
 
 void initMotor()
@@ -76,19 +91,27 @@ void initMotor()
   mcp2515.setNormalMode();
   Timer1.initialize(interval);         
   Timer1.attachInterrupt(checkCANmsg); // attach the service routine here
+  // MsTimer2::set(3000,TEST);
+  // MsTimer2::start();
 }
 
+
 // 更新电机各个参数
-void updateInfo(int motorID)
+void updateInfo(const int motorID)
 {
 
   angle[motorID] = toRealData(canMsgIn.data[0], canMsgIn.data[1]);
-  RPM[motorID] = update_RPM_est( toRealData(canMsgIn.data[2],canMsgIn.data[3]) ) ; // 使用均值滤波
-  // RPM[motorID] = toRealData(canMsgIn.data[2], canMsgIn.data[3]);  // 不滤波
+  RAW_RPM = toRealData(canMsgIn.data[2],canMsgIn.data[3]);
+  // 卡尔曼滤波
+  RPM[motorID] = (int)myFilter.getFilteredValue( RAW_RPM );
+  // 不滤波
+  // RPM[motorID] = toRealData(canMsgIn.data[2], canMsgIn.data[3]);  
   actualCurrent[motorID] = toRealData(canMsgIn.data[4], canMsgIn.data[5]);
   T[motorID] = canMsgIn.data[6];
-  sum_delta_speed += set_speed - RPM[0];
-  if(set_pos - position > 200)
+  delta_speed = set_speed - RPM[0];
+  sum_delta_speed += delta_speed;
+  sum_delta_speed = constrain(sum_delta_speed,-16384000,16384000);
+  // if(set_pos - position > 200)
     sum_delta_pos += set_pos - position;
 
   delta_pos = angle[motorID] - angle_last[motorID] ;
@@ -121,11 +144,17 @@ void updateInfo(int motorID)
   
   angle_last[motorID] = angle[motorID];
 
-  set_speed = PID_Position(set_pos);
-  setMotorCurrent(0, PID_Speed(set_speed));
+  
+  // if (abs(set_pos - position) < 400 && RPM[motorID] < 300)
+  //   set_speed = 0;
+  // else 
+  //   set_speed = calc_Position(set_pos);
+  set_speed = TEST_SPEED;
+  set_current = calc_Speed(set_speed);
+  setMotorCurrent(0, set_current);
 }
 
-void makeMsg(int motorID)
+void makeMsg(const int motorID)
 { // make the msg to send
   canMsgOut.can_id = 0x200;
   canMsgOut.can_dlc = 8;
@@ -133,7 +162,7 @@ void makeMsg(int motorID)
   canMsgOut.data[motorID + 1] = (char)(setCurrent[motorID] % 256); // Low 8 bit
 }
 
-void setMotorCurrent(int motorID, int current)
+void setMotorCurrent(const int motorID, const int current)
 { // set motor current  -16384 ~ 16384 ----> -20A ~ +20A
   setCurrent[motorID] = current;
   makeMsg(motorID);
@@ -147,21 +176,23 @@ void printMessage(int motorID)
   // Serial.print(delta_pos);
   // Serial.print("\t");
 
-  Serial.print(long(position));
-  Serial.print("\t");
-  Serial.print(angle[motorID]);
-  Serial.print("\t");
+  // Serial.print(long(position));
+  // Serial.print("\t");
+  // Serial.print(0.001 * pos_Kp *(set_pos - position));
+  // Serial.print("\t");
 
   // Serial.print(set_pos);
   // Serial.print("\t");
 
   // Serial.print("Angle: ");
   Serial.print(RPM[motorID]);
+  // Serial.print("\t");
+  // Serial.print(set_speed);
   Serial.print("\t");
 
-  // Serial.print("RPM: ");
-  Serial.print(set_pos);
-  Serial.print("\t");
+  // // Serial.print("RPM: ");
+  // Serial.print(set_pos);
+  // Serial.print("\t");
 
   // Serial.print("I: ");
   // Serial.print(actualCurrent[motorID]);
@@ -172,11 +203,11 @@ void printMessage(int motorID)
   // Serial.print("\t");
 
   // Serial.print("PID: ");
-  Serial.print(PID_Speed(set_speed));
+  Serial.print(set_speed);
   Serial.print("\t");
 
-  //  Serial.print(TAG);
-  // Serial.print("\t");
+   Serial.print(set_current+set_speed);
+  Serial.print("\t");
   // Serial.print("\t#########>>>>");
   Serial.println();
 }
@@ -213,9 +244,9 @@ void loop()
   if (Serial.available() > 0){
     length = Serial.readBytes(recv, 50);
     recv[length] = '\0';
-    set_pos = atol (recv);
+    TEST_SPEED = atol (recv);
 
   }
-  
+  // delay(100);s
   printMessage(canMsgIn.can_id - 0x201);
 }

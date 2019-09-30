@@ -49,7 +49,8 @@ int set_current[2] = {0};
 
 
 const long Hz = 1000000 / interval;
-FastPID speed_PID(speed_Kp, speed_Ki, speed_Kd, Hz, 15, true);
+FastPID speed_PID_0(speed_Kp, speed_Ki, speed_Kd, Hz, 15, true);
+FastPID speed_PID_1(speed_Kp, speed_Ki, speed_Kd, Hz, 15, true);
 
 int TAG; //debug用
 
@@ -63,16 +64,23 @@ int calc_Position(const long setPos, const int motorID)
       -16384, 16384);
 }
 
-int calc_Speed(const long setSpeed, const int motorID)
-{
-  //TODO: 可能要分为不同速度
-  return speed_PID.step(setSpeed, RPM[motorID]);
-}
+// int calc_Speed(const long setSpeed, const int motorID)
+// {
+//   //TODO: 可能要分为不同速度
+//   return speed_PID.step(setSpeed, RPM[motorID]);
+// }
 
 void handler_PID_Position()
 {
   set_speed[0] = calc_Position(set_pos[0],0);
-  set_speed[1] = calc_Position(set_pos[1],1);
+  // set_speed[1] = calc_Position(set_pos[1],1);
+}
+
+void handler_PID_Speed()
+{
+  set_current[0] = speed_PID_0.step(set_speed[0], RPM[0]);
+  set_current[1] = speed_PID_1.step(set_speed[1], RPM[1]);
+  setMotorCurrent();
 }
 
 void initMotor()
@@ -129,18 +137,19 @@ void updateInfo(const int motorID)
     position[motorID] += (RPM[motorID] * i1) * 8192;
 
   angle_last[motorID] = angle[motorID];
-  // set_speed[0] = calc_Position(set_pos[0]);
-  set_current[0] = calc_Speed(set_speed[motorID], motorID);
-  setMotorCurrent(motorID, set_current[motorID]);
+  handler_PID_Speed();
+  //  set_current[0] = calc_Speed(set_speed[motorID], motorID);
+  //   setMotorCurrent();
 }
 
-void setMotorCurrent(const int motorID, const int current)
+void setMotorCurrent()
 { // set motor current  -16384 ~ 16384 ----> -20A ~ +20A
-  set_current[motorID] = current;
   canMsgOut.can_id = 0x200;
   canMsgOut.can_dlc = 8;
-  canMsgOut.data[motorID] = (char)(set_current[motorID] / 256);     // High 8 bit
-  canMsgOut.data[motorID + 1] = (char)(set_current[motorID] % 256); // Low 8 bit
+  canMsgOut.data[0] = (char)(set_current[0] / 256);     // High 8 bit
+  canMsgOut.data[1] = (char)(set_current[0] % 256); // Low 8 bit
+  canMsgOut.data[2] = (char)(set_current[1] / 256);     // High 8 bit
+  canMsgOut.data[3] = (char)(set_current[1] % 256); // Low 8 bit
   mcp2515.sendMessage(&canMsgOut);
 }
 
@@ -211,7 +220,7 @@ void setup()
   initMotor();
 
   // 如果PID参数错误
-  if (speed_PID.err())
+  if (speed_PID_0.err())
   {
     Serial.println("There is a configuration error!");
     for (;;);

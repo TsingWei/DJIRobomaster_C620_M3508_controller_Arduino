@@ -12,4 +12,5 @@
 * [Arduino-Kalman](https://github.com/bachagas/Kalman) Kalman滤波的库，方便滤波
 ## Main:
 [/src/main.ino](/src/main.ino)
-整体框架: ![flowchart](/img/flowchart.png)
+## 整体框架: 
+![flowchart](/img/flowchart.png)

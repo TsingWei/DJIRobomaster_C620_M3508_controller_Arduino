@@ -14,10 +14,10 @@
 #define interval 2000   // 2ms采样间隔  单位us
 
 // 位置环PID参数。速度环实现后，一般只需要P项
-const float pos_Kp = 0.15;    
+const float pos_Kp = 0.05;  // 0.15  
 const int pos_Ki = 0;         
 const int pos_Kd = 0;
-long sum_delta_pos = 0;     // 位置差的近似积分
+          
 
 // 速度环PID参数
 // 带负载则根据负载提高Ki，微调Kp
@@ -39,28 +39,29 @@ int actualCurrent[2] = {0};
 int T[2] = {0};
 
 int RAW_RPM; // 原始RPM值
-int delta_pos; // 两次采样的转子位置差值
+int delta_pos[2] = {0}; // 两次采样的转子位置差值
 char recv[50]; // 从串口接收到的字符串
-
+long sum_delta_pos[2] = {0};     // 位置差的和  
 long set_pos[2] = {0};
 int set_speed[2] = {0};
 int set_current[2] = {0};
-
-
-
-const long Hz = 1000000 / interval;
-FastPID speed_PID_0(speed_Kp, speed_Ki, speed_Kd, Hz, 15, true);
-FastPID speed_PID_1(speed_Kp, speed_Ki, speed_Kd, Hz, 15, true);
-
-int TAG; //debug用
-
 long position[2] = {0}; // 当前转子位置
 const float i1 = 136.53333 / (1000000 / interval); // 积分速度换算用的中间常数
+
+const long speed_Hz = 1000000 / interval;
+FastPID speed_PID_0(speed_Kp, speed_Ki, speed_Kd, speed_Hz, 15, true);
+FastPID speed_PID_1(speed_Kp, speed_Ki, speed_Kd, speed_Hz, 15, true);
+
+const long pos_Hz = 1000 / pos_interval;
+FastPID pos_PID_0(pos_Kp, pos_Ki, pos_Kd, pos_Hz, 15, true);
+FastPID pos_PID_1(pos_Kp, pos_Ki, pos_Kd, pos_Hz, 15, true);
+
+int TAG; //debug用
 
 int calc_Position(const long setPos, const int motorID)
 {
   return constrain(
-      pos_Kp * (setPos - position[motorID]) + 0 * sum_delta_pos,
+      pos_Kp * (setPos - position[motorID]) + 0 * sum_delta_pos[motorID],
       -16384, 16384);
 }
 
@@ -72,9 +73,10 @@ int calc_Position(const long setPos, const int motorID)
 
 void handler_PID_Position()
 {
+  printMessage(canMsgIn.can_id - 0x201); //输出信息
+  // set_speed[0] =  pos_PID_0.step(set_pos[0], position[0]);
   set_speed[0] = calc_Position(set_pos[0],0);
-  // set_speed[1] = calc_Position(set_pos[1],1);
-}
+} 
 
 void handler_PID_Speed()
 {
@@ -108,27 +110,27 @@ void updateInfo(const int motorID)
   actualCurrent[motorID] = toRealData(canMsgIn.data[4], canMsgIn.data[5]);
   T[motorID] = canMsgIn.data[6];
 
-  sum_delta_pos += set_pos[0] - position[motorID];
+  sum_delta_pos[motorID] += set_pos[motorID] - position[motorID];
 
-  delta_pos = angle[motorID] - angle_last[motorID];
+  delta_pos[motorID] = angle[motorID] - angle_last[motorID];
   if (abs(RPM[motorID]) < 1200) // 低速状态
   {
     // 转满一圈
-    if (delta_pos < -8000)
+    if (delta_pos[motorID] < -8000)
       position[motorID]++;
-    else if (delta_pos > 8000)
+    else if (delta_pos[motorID] > 8000)
       position[motorID]--;
     // 未转满一圈
     else
-      position[motorID] += delta_pos;
+      position[motorID] += delta_pos[motorID];
   }
   else if (abs(RPM[motorID]) < 6000) // 中速状态
   {
-    if (RPM[motorID] < 0 && delta_pos > 4000)
+    if (RPM[motorID] < 0 && delta_pos[motorID] > 4000)
     {
       position[motorID] -= 8192;
     }
-    else if (-delta_pos > 4000 && RPM[motorID] > 0)
+    else if (-delta_pos[motorID] > 4000 && RPM[motorID] > 0)
     {
       position[motorID] += 8192;
     }
@@ -157,26 +159,26 @@ void printMessage(int motorID)
 {
   // Serial.print("ID：");
   // Serial.print("<<<<#########");
-  // Serial.print(delta_pos);
+  // Serial.print(delta_pos[motorID]);
   // Serial.print("\t");
 
-  // Serial.print(long(position[motorID]));
-  // Serial.print("\t");
+  Serial.print(long(position[motorID]));
+  Serial.print("\t");
   // Serial.print(0.001 * pos_Kp *(set_pos[0] - position[motorID]));
   // Serial.print("\t");
 
-  Serial.print(RAW_RPM);
-  Serial.print("\t");
+  // Serial.print(RAW_RPM);
+  // Serial.print("\t");
 
   // Serial.print("Angle: ");
-  Serial.print(RPM[motorID]);
+  // Serial.print(RPM[motorID]);
   // Serial.print("\t");
-  // Serial.print(set_speed[0]);
+  Serial.print(set_speed[0]);
   Serial.print("\t");
 
   // // Serial.print("RPM: ");
-  // Serial.print(set_pos[0]);
-  // Serial.print("\t");
+  Serial.print(set_pos[0]);
+  Serial.print("\t");
 
   // Serial.print("I: ");
   // Serial.print(actualCurrent[motorID]);
@@ -187,7 +189,7 @@ void printMessage(int motorID)
   // Serial.print("\t");
 
   // Serial.print("PID: ");
-  Serial.print(set_speed[0]);
+  // Serial.print(set_speed[0]);
   Serial.print("\t");
 
   //  Serial.print(set_current[0]+set_speed[0]);
@@ -230,7 +232,7 @@ void setup()
 void loop()
 {
 
-  /////////////////////////////// 从串口接收消息
+  // 从串口接收消息
   int length;
   if (Serial.available() > 0)
   {
@@ -238,7 +240,7 @@ void loop()
     recv[length] = '\0';
     set_pos[0] = atol(recv);   // 将接收到的数字作为位置设置值
   }
-  ///////////////////////////////
-  printMessage(canMsgIn.can_id - 0x201); //输出信息
-  delay(2);
+  // printMessage(canMsgIn.can_id - 0x201); //输出信息
+  set_pos[0] += 8192;
+  delay(400);
 }

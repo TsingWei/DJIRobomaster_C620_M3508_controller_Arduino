@@ -21,4 +21,5 @@
 | INT    | -     | 
 ## Main:
 [/src/main.ino](/src/main.ino)
-整体框架: ![flowchart](/img/flowchart.png)
+## 整体框架: 
+![flowchart](/img/flowchart.png)
